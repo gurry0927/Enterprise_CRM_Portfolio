@@ -1,159 +1,89 @@
 # Enterprise Contact Management System
 
-> A full-stack CRM system built in 45 days by a solo developer.
-> Manages 3,000+ contacts, 2,000+ projects for an engineering consulting firm.
+> This repository is not just a project record; it serves as a foundational knowledge base for my personal "Digital Twin"—documenting the architecture decisions, engineering trade-offs, and lessons learned while building an enterprise-grade CRM from scratch in 45 days.
 
 ---
 
-## Features
+## 🏗️ Core Engineering Challenges & Solutions
 
-### AI Business Card Scanner (LINE Bot)
-Snap a photo of a business card via LINE, and the system automatically:
-- Extracts 18 fields using AI Vision OCR
-- Normalizes phone numbers (Taiwan format)
-- Parses addresses into structured components
-- Detects duplicate contacts before saving
-- Presents an interactive confirmation flow
+Rather than just building CRUD features, this system was designed to resolve deep-rooted operational bottlenecks for an engineering consulting firm managing 3,000+ contacts and 2,000+ projects.
 
-### Web Management Console
-A modern React SPA for managing the full data lifecycle:
-- **Contacts** — CRUD, search, sort, filter, bulk merge
-- **Companies** — Hierarchy management, tax ID lookup
-- **Groups** — Parent organization management
-- **Projects** — Sync from external data sources
-- **Audit Log** — Full operation history with change diffs
+### 1. Refactoring a PoC into a Production AI Pipeline (LINE Bot)
+Field engineers needed a way to digitize business cards instantly. I took over an experimental Google Apps Script PoC built by a colleague, completely refactored it, and integrated it into our new Python (FastAPI) + Firestore architecture. 
+- Transformed raw GPT-4o Vision OCR outputs into highly structured JSON (18 fields).
+- Engineered a robust sanitization layer specifically tuned for Taiwan's complex address and phone number formats.
+- Implemented a pre-write duplicate detection shield, effectively cutting entry time from minutes down to seconds per card.
 
-### Smart Import Wizard
-4-step guided wizard for bulk importing from Excel:
-1. Upload + automatic project detection
-2. Column mapping (keyword-based auto-match)
-3. Preview with data cleansing (phone separation, address parsing)
-4. Batch import with duplicate detection
+### 2. Resolving "Schrödinger's Duplicates" with a Traceable Merge Engine
+Decades of disjointed Excel entry had polluted the database with duplicate entities (e.g., "John Doe" vs. "John Doe (Manager)").
+- Built a multi-entity merge engine that automatically categorizes field conflicts vs. inheritable data.
+- Handled complex relationship transfers (Project-to-Contact) during the merge.
+- Implemented soft-deletion and strict audit logging, adhering strictly to the **[Data Cleaning with Traceability](https://github.com/gurry0927/data-cleaning-with-traceability)** design pattern to ensure no historical data is permanently lost.
 
-### Intelligent Merge Engine
-Merge 2-5 duplicate records with field-level control:
-- Auto-classifies fields: conflict / auto-inherit / identical
-- Transfers all project associations to the primary record
-- Soft-deletes duplicates (traceable via `mergedIntoId`)
-- Full audit trail of merge operations
+### 3. Taming Unstructured Data: The Excel Import Engine
+Working alongside a colleague who designed the 4-step frontend UI wizard, I built the heavy-lifting backend engine.
+- Engineered algorithms to aggressively parse and normalize heterogeneous Excel data (e.g., splitting `"04-2213-8848 #851\n0918-774-526"` into respective semantic fields).
+- Automated the creation of N:M association graphs between newly imported Contacts, Companies, and Projects.
 
-### Authentication & Authorization
-- Google OAuth with domain restriction
-- RBAC: admin / user / viewer
-- Firebase JWT with LRU-cached verification
-- Complete audit logging (who, when, what, from where)
+### 4. Zero-Friction Web Console (Optimistic UI & Stateful Interceptors)
+To provide a native-app feel within a React SPA, I bypassed traditional loading spinners.
+- **Optimistic UI:** State updates are instantly reflected in the DOM while API requests resolve in the background.
+- **Self-Healing Cache:** Engineered a global Axios interceptor that automatically purges "phantom records" from the frontend state if a 404 is returned, avoiding rigid page reloads.
 
 ---
 
-## Architecture
+## 🏛️ Architecture & Data Model
+
+### The "Project-Centric" Relation Graph
+Traditional CRMs enforce a rigid 1:1 relationship between a contact and a company. In the engineering and construction industry, one person frequently represents multiple sub-contractors or consulting firms depending on the specific project. 
+
+I designed a **Project-Centric bridging model** where individuals map to specific corporate entities strictly within the scope of a given Project, accurately reflecting real-world dynamics.
+
+![Project-Centric Architecture](./images/Project_Centric.png)
+
+### System Architecture Snapshot
+- **Frontend**: React 19, Ant Design 6, Zustand
+- **Backend API**: FastAPI (Python 3.10+)
+- **Primary Database**: Google Firestore (Selected over PostgreSQL for real-time reactivity and managed zero-maintenance overhead)
+- **Security & Identity**: Firebase Authentication (OAuth), Role-Based Access Control (RBAC), Global Audit Logging
+- **Infrastructure**: Docker Compose, Caddy Reverse Proxy, GCP VM
 
 ![System Architecture](./images/System_Architecture.png)
 
 ---
 
-## Data Model: Project-Centric Design
+## ⚙️ Development Highlights & GitFlow Adoption
 
-Traditional CRMs enforce a 1:1 relationship between a contact and a company.
-In reality, the same person often represents **multiple companies across different projects**.
+Building the features was only half the battle. Coming from a background of standalone scripts and rapid prototyping, I deliberately used this project to institutionalize enterprise engineering practices into my workflow.
 
-![Project-Centric Architecture](./images/Project_Centric.png)
-
-This design reflects real-world business relationships in the engineering/construction industry.
-
----
-
-## Tech Stack
-
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **Frontend** | React 19, JavaScript, Ant Design, Vite | SPA with enterprise UI components |
-| **Backend** | FastAPI (Python) | High-performance async REST API |
-| **Database** | Google Firestore | Serverless NoSQL with auto-backup |
-| **AI** | GPT-4o (Vision) | Business card OCR with structured output |
-| **Chat** | LINE Bot SDK | Mobile-first business card scanning |
-| **Auth** | Firebase Authentication | Google OAuth + JWT |
-| **Deploy** | Docker Compose, Caddy, GCP | Containerized deployment |
-| **Sync** | Google Sheets API (gspread) | Automated project data sync |
-
----
-
-## Key Technical Decisions
-
-### Why Firestore over PostgreSQL?
-Started with PostgreSQL (via ERP), migrated to Firestore for:
-- Real-time read/write performance (10x improvement)
-- Zero maintenance (fully managed)
-- Automatic backups
-- Better fit for document-oriented data model
-
-### Why Write-Through Cache Invalidation?
-- TTL-based caching caused data inconsistency windows
-- Write-through invalidation: cache is cleared on every write operation
-- Added Self-Healing Cache: auto-removes phantom records on read failures
-- Result: Firestore reads dropped from 260K/day to <10K/day
-
-### Why LINE Bot for OCR?
-- Target users are field staff who are always on mobile
-- LINE is the dominant messaging app in Taiwan (95%+ penetration)
-- Zero installation, zero training — just send a photo
-- Quick Reply buttons enable rapid field editing
-
----
-
-## Performance Metrics
-
-| Metric | Before | After |
-|--------|--------|-------|
-| Business card entry | 3-5 min/card | 10 sec/card |
-| Excel import | 1-2 hours/file | 5 min/file |
-| API response time | 200-500 ms | 20-50 ms |
-| Database reads | 260K/day | <10K/day |
-| Duplicate entries | Frequent | Near zero |
-
----
-
-## Development Stats
+I systematically audited my own codebase, identifying 78 architectural and logic debt items. I transitioned to a rigorous **Feature Branch / Pull Request workflow**, writing unit tests and utilizing squash-and-merge strategies to build a pristine commit history. 
 
 | Metric | Value |
 |--------|-------|
 | Development period | 45 days |
-| Total commits | 633 |
-| Codebase size | 124,811 lines |
-| Team size | 1 (solo developer) |
-| Average commits/day | 14.1 |
+| Total commits | 630+ |
+| Scope | Full-stack (API, SPA, Bot) |
 
 ---
 
-## Project Timeline
+## 📖 Deep Dive & Documentation
 
-```
-Week 1    ERP Customization — Odoo module, Taiwan phone formatting
-Week 2    LINE Bot — AI OCR, Flex Message UI, duplicate detection
-Week 3-4  Web App — React SPA, Excel import, merge engine
-Week 4    Auth & Audit — Firebase Auth, RBAC, operation logging
-Week 5-6  Cloud Migration — Firestore migration, project sync, optimization
-```
+Want to see the thought process behind these architecture decisions? Check out my detailed Chinese documentation:
+
+- 🧱 **[Technical Architecture & Implementation Details](./docs/Enterprise專案技術思維與實作細節.md)** (My Tech Lead perspective & decision matrix)
+- 🎯 **[Engineering Case Studies / STAR Method](./docs/Enterprise專案面試_STAR案例集.md)** (Deep dives into how I solved specific business pain points)
+- 🔍 **[Code Review & GitFlow Experience](./docs/Code_Review_and_GitFlow_Experience.md)** (My transition to structured CI/CD workflows)
+
+> *Note: This is a private enterprise system. Architecture diagrams and technical descriptions are shared for portfolio and educational purposes only.*
 
 ---
-
-## License
-
-This is a private enterprise system. Architecture diagrams and technical descriptions
-are shared for portfolio/educational purposes only.
+*(Screenshots for reference)*
 
 ### Intelligent Merge Engine
-*(The system intelligently highlights conflicts and allows field-level resolution while preserving data lineage)*
 ![Intelligent Merge Engine](./images/Intelligent_Merge_Engine.png)
 
-### Smart Import Wizard
-*(4-step wizard with real-time duplicate detection and data cleansing)*
+### Smart Import Wizard (Frontend UI design by colleague)
 ![Smart Import Wizard](./images/Smart_Import_Wizard.png)
 
-### Comprehensive Audit Logging & Traceability
-*(Full operation history with field-level JSON diffs for enterprise security compliance)*
+### Comprehensive Audit Logging
 ![Audit Log](./images/Cover_AuditLog_JSON.jpeg)
-
-### Deep Dive & Case Studies
-Want to see the thought process behind these features? Check out the detailed documentation:
-- 📖 [Technical Architecture & Implementation Details](./docs/Enterprise專案技術思維與實作細節.md)
-- 🎯 [STAR Method Case Studies (Problem Solving Scenarios)](./docs/Enterprise專案面試_STAR案例集.md)

@@ -1,7 +1,7 @@
 # Enterprise 專案管理系統 - 技術思維與實作細節
 
-> 這份文件記錄了我在開發 Enterprise 系統過程中的技術決策、設計思維、問題解決方法，
-> 以及具體的程式碼實作。適合用於「數位分身」系統理解我的技術風格。
+> 這份文件不只是一份專案紀錄，它也是我正在建構的「個人數位分身（Digital Twin）」的底層知識庫。
+> 這裡面記載了我在極限 45 天內，獨自從零打造這套 Enterprise CRM 系統的架構決策、技術挑戰與突破，以及為了符合企業級規範所做的每一步權衡。
 
 ---
 
@@ -9,7 +9,7 @@
 
 ### 1.1 從 GAS 到統一 Odoo 平台
 
-**初始問題**（Enterprise 1.0 / GAS 時代）：
+**開發初期的技術債**（Enterprise 1.0 / GAS 時代）：
 ```
 資料分散問題:
 - Enterprise-CRS LINE Bot (GAS)     → Google Sheets
@@ -25,13 +25,13 @@
 - 10,000 筆資料效能瓶頸
 - sharded index workaround 複雜且脆弱
 
-**我們的決策**：
-- Odoo 為唯一資料源 → PostgreSQL 15
-- 統一開發語言 → Python 3.10+
-- 一個 VM、一個 docker-compose
-- 三層架構：Web App (React) → FastAPI → Odoo RPC
+**我向主管與團隊提出的架構重構提案**：
+- 終止資料分裂，以 Odoo 作為唯一資料源（PostgreSQL 15）
+- 統一開發語言，全面轉向 Python 3.10+
+- 採用單一 VM、單一 docker-compose 集中部署
+- 確立三層架構：Web App (React) → FastAPI → Odoo RPC
 
-**為什麼選 Odoo 而不是純 Firestore？**
+**當時為什麼選 Odoo 而不是純 Firestore？**
 ```
 當時的思考：
 ✅ Odoo:
@@ -48,9 +48,9 @@
 
 ### 1.2 Firestore 遷移的技術轉折：權限整合與客製化彈性 (2026-02-23)
 
-**背景**：當系統從「內部管理」延伸到「LINE Bot 現場應用」與「Web 高階統計」時，我們發現原有的 Odoo 平台遭遇了管理複雜度與顯示彈性的雙重瓶頸。
+**背景與痛點**：當系統從「內部管理」延伸到「LINE Bot 現場應用」與「Web 高階統計」時，營運團隊與我同時發現原有的 Odoo 平台遭遇了管理複雜度與顯示彈性的雙重瓶頸。
 
-**我們的決策樹**：
+**我主導的決策樹與架構移轉**：
 ```
 問題：雙重認證摩擦（Auth Friction）與 UI 擴充受限
 
@@ -60,7 +60,7 @@
 ├─ 方案 B: 維持 Odoo + Firebase 雙系統認證
 │  └─ 限制: 員工需管理兩套帳密，開發端維護兩套權限同步（RBAC）的複雜度太高。
 │
-└─ 方案 C: 核心資料遷移至 Firestore ✅ 最終選擇
+└─ 方案 C: 核心資料遷移至 Firestore ✅ 我的最終提案
    └─ 優勢:
       - 統一使用 Firebase Auth (Google SSO)，大幅降低員工管理負擔。
       - 現有案量規模（約 2,000 筆）完美適配 Firestore，效能極佳且幾乎免維護。
@@ -559,7 +559,7 @@ contacts: {
 **場景還原：MVP 與 Production 的架構碰撞**：
 ```
 Phase 1 (MVP 時期 - 團隊以 GAS 寫入 Google Sheets):
-  - 為了讓主管最快看到價值，報表上只粗暴存入純文字：contactName = "王大明"
+  - 為了讓主管最快看到價值，報表上只直接存入純文字：contactName = "王大明"
   - 試算表本身沒有關聯式資料庫的概念，因此聯絡人缺乏實體 ID（contactId = NULL）
 
 Phase 2 (Production 時期 - 升級至 Firestore):
@@ -568,7 +568,7 @@ Phase 2 (Production 時期 - 升級至 Firestore):
 這導致部分完全依賴早期 MVP 建檔的歷史專案，在新的強關聯架構下，無法透過 ID 查找到聯絡人，導致前端畫面無法渲染。
 
 **我的解法：雙層 Fallback 取代硬報錯，加上自動化收編機制**：
-在進行系統升級的雙軌過渡期，我設計了雙層讀取策略與資料重整機制，確保在使用體驗上「零停機、零報錯」：
+在進行系統升級的雙軌過渡期，我設計了雙層讀取策略與資料重整機制，確保在使用者營運體驗上「平滑過渡、零報錯」：
 
 ```python
 def get_project_contacts(project_id: str):
@@ -585,7 +585,7 @@ def get_project_contacts(project_id: str):
             if contact_doc.exists:
                 contact_name = contact_doc.to_dict().get('name', contact_name)
         
-        # 退路層：即使沒有 ID（MVP 時期的純文字孤兒），依然拿出純文字，保證畫面不開天窗
+        # 退路層：即使沒有 ID（無關聯 ID 的歷史資料），依然拿出純文字，保證畫面正常渲染
         results.append({
             'contact_id': contact_id,      # 可能為空，但前端依然可渲染
             'contact_name': contact_name,  # 保底至少有文字
@@ -594,15 +594,29 @@ def get_project_contacts(project_id: str):
 ```
 
 **最終收斂（資料一致性修復腳本）**：
-為了把這些 MVP 時期留下的「無 ID 純文字孤兒」納入新系統的嚴謹管理，我開發了一套一次性的「自動關聯與收編腳本」。它會透過姓名反查主檔通訊錄，若命中則自動補齊 `contactId` 建立實體關聯；這樣便巧妙地解除了早期快速開發留下來的技術債，讓資料庫達到 100% 的結構一致性。
+為了把這些 MVP 時期留下的「無關聯 ID 歷史實體」納入新系統的嚴謹管理，我開發了一套一次性的「自動關聯與收編腳本」。它會透過姓名反查主檔通訊錄，若命中則自動補齊 `contactId` 建立實體關聯；這樣便巧妙地解除了早期快速開發留下來的技術債，顯著提升資料庫的結構一致性。
+
+---
+
+### 4.3 合併引擎與可溯源資料清洗 (Data Cleaning with Traceability) (2026-03-08)
+
+**挑戰**：系統中累積了 3,000+ 筆聯絡人，由於歷史原因（多人各自輸入），存在大量重複資料。在建立「合併引擎」時，如果直接採用傳統的「覆蓋 (Overwrite)」清洗模式，一旦發生誤併，原始資料將永久遺失，造成嚴重的孤兒資料 (Orphan Data) 問題。
+
+**我的解法：將清洗視為「建立映射 (Mapping)」而非「覆寫」**：
+秉持著我過去整理的開源設計模式 **[Data Cleaning with Traceability](https://github.com/gurry0927/data-cleaning-with-traceability)**，我將這個理念落實在 CRM 的合併引擎中：
+
+1. **不可變的原始資料 (Raw Data Is Immutable)**：被合併的歷史聯絡人（Raw Value）不會被 `DELETE` 刪除，而是透過給予 `mergedIntoId` 標記為軟刪除狀態。
+2. **清洗是建立關係 (Cleaning Is Mapping)**：當多筆資料發生衝突時，系統會引導管理員進行欄位選擇，最終結果將指向一個「權威實體 (Normalized Entity)」。
+3. **無損回溯 (Reversibility)**：搭配全量寫入 Firestore 的稽核系統，所有的合併決策與關聯轉移都被記錄下來，確保未來任何時刻都能透過腳本實現可靠的反向還原。這套機制成功清理了數百筆歷史重複資料，並且達到了上線後「0 筆資料永久遺失」的安全目標。
 
 ---
 
 
 
-### 5.1 Excel 匯入精靈（4 步驟）
+### 5.1 從 PoC 到自動化：為 Excel 匯入精靈裝上後端引擎
 
-**設計理由**：分步驟減低使用者認知負荷
+**背景與分工**：同事最初設計了一個體驗極佳的「4 步驟 Excel 匯入精靈 UI」雛型。我接手這個 PoC 後，我們達成了明確的分工：他負責前端引導的流暢度，而我負責打造**後端的深層清洗與智慧比對引擎**，解決最棘手的資料庫關聯與資料正規化問題。
+**設計理由（前端視角）**：分步驟減低使用者認知負荷
 
 ```
 Step 1: 上傳
@@ -707,7 +721,7 @@ Step 4: 結果
 
 ## 7. 設計哲學總結
 
-### 我們的技術決策原則
+### 我的技術決策原則
 
 | 面向 | 我的選擇 | 理由 |
 |-----|---------|------|
